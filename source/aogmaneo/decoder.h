@@ -54,7 +54,7 @@ private:
 
     Float_Buffer dendrite_acts;
 
-    Float_Buffer dendrite_deltas;
+    Int_Buffer dendrite_deltas;
 
     // visible layers and descs
     Array<Visible_Layer> visible_layers;
@@ -72,6 +72,7 @@ private:
         const Int2 &column_pos,
         const Array<Int_Buffer_View> &input_cis,
         Int_Buffer_View hidden_target_cis,
+        unsigned long* state,
         const Params &params
     );
 
@@ -166,11 +167,5 @@ public:
     const Int3 &get_hidden_size() const {
         return hidden_size;
     }
-
-    // merge list of decoders and write to this one
-    void merge(
-        const Array<Decoder*> &decoders,
-        Merge_Mode mode
-    );
 };
 }

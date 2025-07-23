@@ -53,10 +53,10 @@ void Image_Encoder::forward(
 
                 Int2 offset(ix - field_lower_bound.x, iy - field_lower_bound.y);
 
-                int i_start = vld.size.z * (iy + ix * vld.size.y);
+                int visible_cells_start = vld.size.z * (iy + ix * vld.size.y);
 
                 for (int vc = 0; vc < vld.size.z; vc++) {
-                    float input = vl_inputs[vc + i_start] * byte_inv;
+                    float input = vl_inputs[vc + visible_cells_start] * byte_inv;
 
                     center += input;
                 }
@@ -101,12 +101,12 @@ void Image_Encoder::forward(
 
                 int wi_start_partial = vld.size.z * (offset.y + diam * (offset.x + diam * hidden_column_index));
 
-                int i_start = vld.size.z * (iy + ix * vld.size.y);
+                int visible_cells_start = vld.size.z * (iy + ix * vld.size.y);
 
                 for (int vc = 0; vc < vld.size.z; vc++) {
                     int wi_start = hidden_size.z * (vc + wi_start_partial);
 
-                    float input_centered = vl_inputs[vc + i_start] * byte_inv - center;
+                    float input_centered = (vl_inputs[vc + visible_cells_start] * byte_inv - center) * 2.0f;
 
                     for (int hc = 0; hc < hidden_size.z; hc++) {
                         int hidden_cell_index = hc + hidden_cells_start;
@@ -139,7 +139,7 @@ void Image_Encoder::forward(
     hidden_cis[hidden_column_index] = max_index;
 
     if (learn_enabled) {
-        for (int dhc = -params.radius; dhc <= params.radius; dhc++) {
+        for (int dhc = -params.n_radius; dhc <= params.n_radius; dhc++) {
             int hc = max_index + dhc;
 
             if (hc < 0 || hc >= hidden_size.z)
@@ -187,7 +187,7 @@ void Image_Encoder::forward(
 
                             float w = vl.weights[wi] * byte_inv * 2.0f - 1.0f;
 
-                            vl.weights[wi] = min(255, max(0, roundf(vl.weights[wi] + rate * 255.0f * (input_centered - w))));
+                            vl.weights[wi] = min(255, max(0, vl.weights[wi] + roundf2i(rate * 255.0f * (input_centered - w))));
                         }
                     }
             }
@@ -346,7 +346,7 @@ void Image_Encoder::reconstruct(
 
         sum /= max(1, count * 255);
 
-        vl.reconstruction[visible_cell_index] = roundf(min(1.0f, max(0.0f, (sum - 0.5f) * 2.0f * params.scale + 0.5f)) * 255.0f);
+        vl.reconstruction[visible_cell_index] = roundf2b(min(1.0f, max(0.0f, (sum - 0.5f) * 2.0f * params.scale + 0.5f)) * 255.0f);
     }
 }
 
@@ -574,47 +574,5 @@ void Image_Encoder::read_weights(
 
         reader.read(&vl.weights[0], vl.weights.size() * sizeof(Byte));
         reader.read(&vl.recon_weights[0], vl.recon_weights.size() * sizeof(Byte));
-    }
-}
-
-void Image_Encoder::merge(
-    const Array<Image_Encoder*> &image_encoders,
-    Merge_Mode mode
-) {
-    switch (mode) {
-    case merge_random:
-        for (int vli = 0; vli < visible_layers.size(); vli++) {
-            Visible_Layer &vl = visible_layers[vli];
-            const Visible_Layer_Desc &vld = visible_layer_descs[vli];
-        
-            for (int i = 0; i < vl.weights.size(); i++) {
-                int e = rand() % image_encoders.size();                
-
-                vl.weights[i] = image_encoders[e]->visible_layers[vli].weights[i];
-                vl.recon_weights[i] = image_encoders[e]->visible_layers[vli].recon_weights[i];
-            }
-        }
-
-        break;
-    case merge_average:
-        for (int vli = 0; vli < visible_layers.size(); vli++) {
-            Visible_Layer &vl = visible_layers[vli];
-            const Visible_Layer_Desc &vld = visible_layer_descs[vli];
-        
-            for (int i = 0; i < vl.weights.size(); i++) {
-                float total = 0.0f;
-                float recon_total = 0.0f;
-
-                for (int e = 0; e < image_encoders.size(); e++) {
-                    total += image_encoders[e]->visible_layers[vli].weights[i];
-                    recon_total += image_encoders[e]->visible_layers[vli].recon_weights[i];
-                }
-
-                vl.weights[i] = roundf(total / image_encoders.size());
-                vl.recon_weights[i] = roundf(recon_total / image_encoders.size());
-            }
-        }
-
-        break;
     }
 }

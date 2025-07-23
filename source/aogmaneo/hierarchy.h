@@ -28,20 +28,22 @@ public:
         IO_Type type;
 
         int num_dendrites_per_cell; // also for policy
-        int value_num_dendrites_per_cell; // value dendrites
+        int value_num_dendrites_per_cell; // value function dendrites
 
         int up_radius; // encoder radius
         int down_radius; // decoder radius, also shared with actor if there is one
 
+        int value_size; // resution of values for RL
         int history_capacity; // max actor credit assignment horizon
 
         IO_Desc(
             const Int3 &size = Int3(5, 5, 16),
             IO_Type type = prediction,
             int num_dendrites_per_cell = 4,
-            int value_num_dendrites_per_cell = 8,
+            int value_num_dendrites_per_cell = 2,
             int up_radius = 2,
             int down_radius = 2,
+            int value_size = 128,
             int history_capacity = 512
         )
         :
@@ -51,6 +53,7 @@ public:
         value_num_dendrites_per_cell(value_num_dendrites_per_cell),
         up_radius(up_radius),
         down_radius(down_radius),
+        value_size(value_size),
         history_capacity(history_capacity)
         {}
     };
@@ -159,7 +162,7 @@ public:
         const Array<Int_Buffer_View> &input_cis, // inputs to remember
         bool learn_enabled = true, // whether learning is enabled
         float reward = 0.0f, // reward
-        float mimic = 0.0f // mimicry mode
+        float mimic = 0.0f // mimic mode for bc on actor
     );
 
     void clear_state();
@@ -228,6 +231,15 @@ public:
             return actors[d_indices[i]].get_hidden_acts();
 
         return decoders[0][d_indices[i]].get_hidden_acts();
+    }
+
+    // get value estimate from actor
+    const Float_Buffer &get_prediction_values(
+        int i
+    ) const {
+        assert(io_types[i] == action);
+
+        return actors[d_indices[i]].get_hidden_values();
     }
 
     // number of io layers
@@ -315,11 +327,5 @@ public:
     const Int_Buffer &get_d_indices() const {
         return d_indices;
     }
-
-    // merge list of hierarchies and write to this one
-    void merge(
-        const Array<Hierarchy*> &hierarchies,
-        Merge_Mode mode
-    );
 };
 }

@@ -92,7 +92,7 @@ void Hierarchy::init_random(
                     if (l < encoders.size() - 1)
                         a_visible_layer_descs[1] = a_visible_layer_descs[0];
 
-                    actors[d_index].init_random(io_sizes[i], io_descs[i].value_num_dendrites_per_cell, io_descs[i].num_dendrites_per_cell, io_descs[i].history_capacity, a_visible_layer_descs);
+                    actors[d_index].init_random(io_sizes[i], io_descs[i].value_size, io_descs[i].value_num_dendrites_per_cell, io_descs[i].num_dendrites_per_cell, io_descs[i].history_capacity, a_visible_layer_descs);
 
                     i_indices[io_sizes.size() + d_index] = i;
                     d_indices[i] = d_index;
@@ -473,37 +473,4 @@ void Hierarchy::read_weights(
     // actors
     for (int d = 0; d < actors.size(); d++)
         actors[d].read_weights(reader);
-}
-
-void Hierarchy::merge(
-    const Array<Hierarchy*> &hierarchies,
-    Merge_Mode mode
-) {
-    Array<Encoder*> merge_encoders(hierarchies.size());
-    Array<Decoder*> merge_decoders(hierarchies.size());
-
-    for (int l = 0; l < encoders.size(); l++) {
-        for (int h = 0; h < hierarchies.size(); h++)
-            merge_encoders[h] = &hierarchies[h]->encoders[l];
-
-        encoders[l].merge(merge_encoders, mode);
-
-        // decoders
-        for (int d = 0; d < decoders[l].size(); d++) {
-            for (int h = 0; h < hierarchies.size(); h++)
-                merge_decoders[h] = &hierarchies[h]->decoders[l][d];
-
-            decoders[l][d].merge(merge_decoders, mode);
-        }
-    }
-    
-    // actors
-    Array<Actor*> merge_actors(hierarchies.size());
-
-    for (int d = 0; d < actors.size(); d++) {
-        for (int h = 0; h < hierarchies.size(); h++)
-            merge_actors[h] = &hierarchies[h]->actors[d];
-
-        actors[d].merge(merge_actors, mode);
-    }
 }

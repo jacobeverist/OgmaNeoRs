@@ -41,15 +41,15 @@ public:
         float lr; // learning rate
         float scale; // scale of reconstruction
         float rr; // reconstruction rate
-        int radius; // SOM neighborhood radius
+        int n_radius; // SOM neighborhood radius
         
         Params()
         :
-        falloff(0.99f),
+        falloff(0.9f),
         lr(0.1f),
         scale(2.0f),
-        rr(0.01f),
-        radius(1)
+        rr(0.02f),
+        n_radius(1)
         {}
     };
 
@@ -100,7 +100,7 @@ public:
     void step(
         const Array<Byte_Buffer_View> &inputs, // input states
         bool learn_enabled, // whether to learn
-        bool learn_recon = true // whether to learn a reconstruction as well (conditional on learn_enabled)
+        bool learn_recon = false // whether to learn a reconstruction as well (conditional on learn_enabled)
     );
 
     void reconstruct(
@@ -170,11 +170,5 @@ public:
     const Int3 &get_hidden_size() const {
         return hidden_size;
     }
-
-    // merge list of image encoders and write to this one
-    void merge(
-        const Array<Image_Encoder*> &image_encoders,
-        Merge_Mode mode
-    );
 };
 }

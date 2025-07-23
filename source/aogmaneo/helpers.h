@@ -35,6 +35,9 @@ const int rand_subseed_offset = 12345;
 const int init_weight_noisei = 8;
 const float init_weight_noisef = 0.01f;
 
+typedef unsigned char Byte;
+typedef signed char S_Byte;
+
 inline float modf(
     float x,
     float y
@@ -87,13 +90,22 @@ inline int ceilf(
     return (x - static_cast<int>(x)) < 0.0f ? static_cast<int>(x - 1) : static_cast<int>(x);
 }
 
-inline int roundf(
+inline int roundf2i(
     float x
 ) {
-    if (x > 0.0f)
-        return static_cast<int>(x + 0.5f);
+    return static_cast<int>(x + (x > 0.0f) - 0.5f);
+}
 
-    return -static_cast<int>(-x + 0.5f);
+inline Byte roundf2b(
+    float x
+) {
+    return static_cast<Byte>(x + 0.5f);
+}
+
+inline S_Byte roundf2sb(
+    float x
+) {
+    return static_cast<S_Byte>(x + (x > 0.0f) - 0.5f);
 }
 
 template <typename T>
@@ -199,8 +211,6 @@ typedef Vec4<int> Int4;
 typedef Vec2<float> Float2;
 typedef Vec3<float> Float3;
 typedef Vec4<float> Float4;
-typedef unsigned char Byte;
-typedef signed char S_Byte;
 
 typedef Array<Byte> Byte_Buffer;
 typedef Array<S_Byte> S_Byte_Buffer;
@@ -367,6 +377,16 @@ inline float sigmoidf(
 #endif
 }
 
+inline float logitf(
+    float x
+) {
+#ifdef USE_STD_MATH
+    return std::log(x / (1.0f - x));
+#else
+    return logf(x / (1.0f - x));
+#endif
+}
+
 inline float tanhf(
     float x
 ) {
@@ -385,10 +405,34 @@ inline float tanhf(
 #endif
 }
 
+inline float symlogf(
+    float x
+) {
+#ifdef USE_STD_MATH
+    return ((x > 0.0f) * 2.0f - 1.0f) * std::log(std::abs(x) + 1.0f);
+#else
+    return ((x > 0.0f) * 2.0f - 1.0f) * logf(abs(x) + 1.0f);
+#endif
+}
+
+inline float symexpf(
+    float x
+) {
+#ifdef USE_STD_MATH
+    return ((x > 0.0f) * 2.0f - 1.0f) * (std::exp(std::abs(x)) - 1.0f);
+#else
+    return ((x > 0.0f) * 2.0f - 1.0f) * (expf(abs(x)) - 1.0f);
+#endif
+}
+
+const float softplus_limit = 4.0f;
+
 inline float softplusf(
     float x
 ) {
-    return logf(1.0f + expf(-abs(x))) + max(0.0f, x);
+    float in_range = (x < softplus_limit);
+
+    return logf(1.0f + expf(x * in_range)) * in_range + x * (1.0f - in_range);
 }
 
 // --- rng ---
@@ -409,8 +453,6 @@ inline unsigned long rand_get_state(
     unsigned long seed
 ) {
     unsigned long state = seed + pcg_increment;
-
-    unsigned int count = static_cast<unsigned int>(state >> 59);
 
     state = state * pcg_multiplier + pcg_increment;
 
@@ -480,12 +522,5 @@ public:
         void* data,
         long len
     ) = 0;
-};
-
-// --- merging ---
-
-enum Merge_Mode {
-    merge_average = 0,
-    merge_random = 1
 };
 }
