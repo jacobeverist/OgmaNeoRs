@@ -24,6 +24,40 @@ For a more in-depth look, check out [the whitepaper](https://ogma.ai/sph-technol
 
 ## Installation
 
+### MacOS Pre-Requisites
+
+```bash
+brew install cmake
+brew install llvm
+brew install libomp
+```
+Python <= 3.10 for pyogmaneo
+
+#### MacOS Lib Build
+
+```bash
+source ./setup_env.sh
+mkdir build
+cd build
+cmake ..
+make
+make install
+```
+
+
+#### C++ Example Build
+
+```bash
+source ./setup_env.sh
+cd examples
+mkdir build
+cd build
+cmake ..
+make
+./cartpole
+```
+
+
 ### CMake
 
 Version 3.13+ of [CMake](https://cmake.org/) is required when building the library.

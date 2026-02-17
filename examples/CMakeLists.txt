@@ -17,7 +17,7 @@ find_package(OpenMP REQUIRED)
 add_executable(cartpole cartpole.cpp)
 
 target_include_directories(cartpole PRIVATE "${AOGMANEO_SOURCE_DIR}")
-target_link_libraries(cartpole "${AOGMANEO_DIR}/libAOgmaNeo.a" OpenMP::OpenMP_CXX)
+target_link_libraries(cartpole "${AOGMANEO_DIR}/build/libAOgmaNeo.a" OpenMP::OpenMP_CXX)
 
 # On macOS, ad-hoc sign executables so they aren't killed by Gatekeeper
 if(APPLE)
