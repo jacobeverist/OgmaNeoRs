@@ -76,7 +76,7 @@ int main() {
 
     const int num_bins = 16;
     const int num_actions = 2;
-    const int num_episodes = 2000;
+    const int num_episodes = 500;
 
     // --- Set up hierarchy ---
 
