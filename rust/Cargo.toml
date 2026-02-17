@@ -1,0 +1,9 @@
+[package]
+name = "aogmaneo"
+version = "0.1.0"
+edition = "2021"
+description = "Sparse Predictive Hierarchies - Rust port of AOgmaNeo"
+license = "CC-BY-NC-SA-4.0"
+
+[dependencies]
+rayon = "1.10"

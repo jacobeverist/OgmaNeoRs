@@ -10,6 +10,9 @@ AOgmaNeo is a C++14 library implementing Sparse Predictive Hierarchies (SPH) —
 
 ```bash
 # macOS (Apple Silicon) — set up OpenMP environment first
+brew install cmake
+brew install llvm
+brew install libomp
 source setup_env.sh
 
 # Standard build
