@@ -1,4 +1,5 @@
 // AOgmaNeo Rust port - Encoder (sparse coder with ART)
+#![allow(clippy::needless_range_loop)]
 
 use rayon::prelude::*;
 use crate::helpers::*;
@@ -76,6 +77,7 @@ pub struct Encoder {
 
 impl Encoder {
     // Compute forward for a single column; returns (ci, learn_flag, comparison)
+    #[allow(clippy::too_many_arguments)]
     fn compute_forward(
         column_pos: Int2,
         hidden_size: Int3,

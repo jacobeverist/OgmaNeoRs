@@ -1,4 +1,5 @@
 // AOgmaNeo Rust port - Actor (RL with actor-critic, eligibility traces)
+#![allow(clippy::needless_range_loop)]
 
 use crate::helpers::*;
 
@@ -463,8 +464,7 @@ impl Actor {
 
         let smooth_new_value_index =
             (symlogf(new_value) / params.value_range * 0.5 + 0.5)
-                .min(1.0)
-                .max(0.0)
+                .clamp(0.0, 1.0)
                 * (self.value_size - 1) as f32;
 
         // compute value weight deltas (re-use value_dendrite_acts)
@@ -475,9 +475,8 @@ impl Actor {
             let error = params.vlr * (target - self.hidden_value_acts[vac + value_cells_start]);
 
             for di in 0..self.value_num_dendrites_per_cell {
-                self.value_dendrite_acts[di + value_dendrites_start] = error
-                    * (if di >= half_value_num { 2.0 } else { 0.0 } - 1.0)
-                    * self.value_dendrite_acts[di + value_dendrites_start];
+                self.value_dendrite_acts[di + value_dendrites_start] *=
+                    error * (if di >= half_value_num { 2.0 } else { 0.0 } - 1.0);
             }
         }
 
@@ -490,9 +489,8 @@ impl Actor {
                     - self.hidden_policy_acts[hc + hidden_cells_start]);
 
             for di in 0..self.policy_num_dendrites_per_cell {
-                self.policy_dendrite_acts[di + policy_dendrites_start] = error
-                    * (if di >= half_policy_num { 2.0 } else { 0.0 } - 1.0)
-                    * self.policy_dendrite_acts[di + policy_dendrites_start];
+                self.policy_dendrite_acts[di + policy_dendrites_start] *=
+                    error * (if di >= half_policy_num { 2.0 } else { 0.0 } - 1.0);
             }
         }
 

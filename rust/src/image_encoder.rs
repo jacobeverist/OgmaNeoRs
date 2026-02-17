@@ -1,4 +1,5 @@
 // AOgmaNeo Rust port - ImageEncoder (SOM for images with reconstruction)
+#![allow(clippy::needless_range_loop)]
 
 use crate::helpers::*;
 
@@ -242,8 +243,7 @@ impl ImageEncoder {
 
                                 let delta = roundf2i(rate * 255.0 * (input_centered - w));
                                 vl.weights[wi] = (vl.weights[wi] as i32 + delta)
-                                    .max(0)
-                                    .min(255) as u8;
+                                    .clamp(0, 255) as u8;
                             }
                         }
                     }
@@ -340,7 +340,7 @@ impl ImageEncoder {
 
             let target = inputs[visible_cell_index] as f32 * byte_inv;
             let reconstructed =
-                ((sum - 0.5) * 2.0 * self.params.scale + 0.5).min(1.0).max(0.0);
+                ((sum - 0.5) * 2.0 * self.params.scale + 0.5).clamp(0.0, 1.0);
             let delta = rand_roundf_step(self.params.rr * (target - reconstructed) * 255.0, state);
 
             for ix in iter_lower_bound.x..=iter_upper_bound.x {
@@ -372,8 +372,7 @@ impl ImageEncoder {
 
                         self.visible_layers[vli].recon_weights[wi] =
                             (self.visible_layers[vli].recon_weights[wi] as i32 + delta)
-                                .max(0)
-                                .min(255) as u8;
+                                .clamp(0, 255) as u8;
                     }
                 }
             }
@@ -457,7 +456,7 @@ impl ImageEncoder {
             sum /= count.max(1) as f32 * 255.0;
 
             self.visible_layers[vli].reconstruction[visible_cell_index] = roundf2b(
-                ((sum - 0.5) * 2.0 * self.params.scale + 0.5).min(1.0).max(0.0) * 255.0,
+                ((sum - 0.5) * 2.0 * self.params.scale + 0.5).clamp(0.0, 1.0) * 255.0,
             );
         }
     }

@@ -1,4 +1,5 @@
 // AOgmaNeo Rust port - Decoder (predictive reconstruction with multi-dendrite perceptrons)
+#![allow(clippy::needless_range_loop)]
 
 use rayon::prelude::*;
 use crate::helpers::*;
@@ -59,6 +60,7 @@ struct ForwardResult {
 }
 
 impl Decoder {
+    #[allow(clippy::too_many_arguments)]
     fn compute_forward(
         column_pos: Int2,
         hidden_size: Int3,
@@ -177,6 +179,7 @@ impl Decoder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn learn_column(
         column_pos: Int2,
         hidden_size: Int3,
@@ -260,8 +263,7 @@ impl Decoder {
                         for di in 0..num_dendrites_per_cell {
                             let delta = dendrite_deltas[dendrites_start + di];
                             vl.weights[di + wi_start] = (vl.weights[di + wi_start] as i32 + delta)
-                                .min(127)
-                                .max(-127) as i8;
+                                .clamp(-127, 127) as i8;
                         }
                     }
                 }

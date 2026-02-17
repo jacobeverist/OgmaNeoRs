@@ -1,5 +1,6 @@
-use aogmaneo::helpers::Int3;
+use aogmaneo::helpers::{Int3, VecWriter, SliceReader};
 use aogmaneo::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
+use aogmaneo::image_encoder::{ImageEncoder, VisibleLayerDesc as IeVLD};
 
 fn make_random_cis(size: Int3) -> Vec<i32> {
     let cols = (size.x * size.y) as usize;
@@ -194,4 +195,92 @@ fn test_multiple_io() {
             assert!(ci >= 0 && ci < col_size);
         }
     }
+}
+
+#[test]
+fn test_image_encoder_step_and_reconstruct() {
+    let visible_layer_descs = vec![IeVLD {
+        size: Int3::new(8, 8, 3), // 8x8 RGB
+        radius: 2,
+    }];
+
+    let mut ie = ImageEncoder::default();
+    ie.init_random(Int3::new(4, 4, 16), visible_layer_descs);
+
+    assert_eq!(ie.get_hidden_size(), Int3::new(4, 4, 16));
+    assert_eq!(ie.get_num_visible_layers(), 1);
+
+    // Synthesize a simple gradient image (8*8*3 bytes)
+    let num_pixels = 8 * 8 * 3;
+    let inputs: Vec<u8> = (0..num_pixels).map(|i| (i % 256) as u8).collect();
+
+    for _ in 0..5 {
+        ie.step(&[&inputs], true, true);
+    }
+
+    // Hidden CIs must be valid
+    let hidden_cis: Vec<i32> = ie.get_hidden_cis().to_vec();
+    assert_eq!(hidden_cis.len(), 4 * 4);
+    for &ci in &hidden_cis {
+        assert!(ci >= 0 && ci < 16, "ci={ci} out of range [0,16)");
+    }
+
+    // reconstruct() should produce a byte image of the right size
+    ie.reconstruct(&hidden_cis);
+    let recon = ie.get_reconstruction(0);
+    assert_eq!(recon.len(), 8 * 8 * 3);
+}
+
+#[test]
+fn test_hierarchy_serialization_roundtrip() {
+    let io_descs = vec![IoDesc {
+        size: Int3::new(4, 4, 8),
+        io_type: IoType::Prediction,
+        num_dendrites_per_cell: 2,
+        up_radius: 2,
+        down_radius: 2,
+        value_size: 32,
+        value_num_dendrites_per_cell: 2,
+        history_capacity: 32,
+    }];
+    let layer_descs = vec![LayerDesc {
+        hidden_size: Int3::new(4, 4, 8),
+        num_dendrites_per_cell: 2,
+        up_radius: 2,
+        recurrent_radius: -1,
+        down_radius: 2,
+    }];
+
+    let mut h = Hierarchy::new();
+    h.init_random(&io_descs, &layer_descs);
+
+    let io_size = h.get_io_size(0);
+    let input_cis: Vec<i32> = (0..(io_size.x * io_size.y) as usize)
+        .map(|i| (i % io_size.z as usize) as i32)
+        .collect();
+
+    // Run a few steps to build up state
+    for _ in 0..3 {
+        h.step(&[&input_cis], true, 0.0, 0.0);
+    }
+
+    // Capture predictions before serialization
+    let preds_before: Vec<i32> = h.get_prediction_cis(0).to_vec();
+
+    // Serialize
+    let mut writer = VecWriter::new();
+    h.write(&mut writer);
+    let bytes = writer.data;
+
+    // Deserialize into a fresh hierarchy
+    let mut h2 = Hierarchy::new();
+    let mut reader = SliceReader::new(&bytes);
+    h2.read(&mut reader);
+
+    // Predictions should match after loading
+    let preds_after: Vec<i32> = h2.get_prediction_cis(0).to_vec();
+    assert_eq!(preds_before, preds_after, "predictions differ after round-trip");
+
+    // Should still be able to step after deserializing
+    h2.step(&[&input_cis], true, 0.0, 0.0);
 }

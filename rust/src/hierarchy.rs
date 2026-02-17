@@ -1,21 +1,17 @@
 // AOgmaNeo Rust port - Hierarchy (top-level orchestrator)
+#![allow(clippy::needless_range_loop)]
 
 use crate::helpers::*;
 use crate::encoder::{Encoder, VisibleLayerDesc as EncoderVLD};
 use crate::decoder::{Decoder, VisibleLayerDesc as DecoderVLD, Params as DecoderParams};
 use crate::actor::{Actor, VisibleLayerDesc as ActorVLD, Params as ActorParams};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum IoType {
     None = 0,
+    #[default]
     Prediction = 1,
     Action = 2,
-}
-
-impl Default for IoType {
-    fn default() -> Self {
-        IoType::Prediction
-    }
 }
 
 impl From<u8> for IoType {
