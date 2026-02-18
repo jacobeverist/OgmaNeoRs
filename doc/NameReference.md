@@ -1,111 +1,175 @@
 # AOgmaNeo variable naming reference
 
-## Encoder/Decoder
+This document describes the variable and field naming conventions used throughout the Rust source (`src/`).
 
-**vl** - visible layer
+## Encoder / Decoder / Actor / ImageEncoder
 
-**vld** - visible layer descriptor
+**vl** — visible layer. The input-side of an encoder, decoder, actor, or image encoder. Stored as `Vec<VisibleLayer>` (each module defines its own `VisibleLayer` type).
 
-**hc** - hidden column index. Range [0, hidden_size.z). Used to index inside of one hidden column
+**vld** — visible layer descriptor. The corresponding configuration struct `VisibleLayerDesc { size: Int3, radius: i32 }`.
 
-**vc** - visible column index. Range [0, vld.size.z). Used to index inside of one visible/input column
+**hc** — index of a cell within one hidden column. Range `[0, hidden_size.z)`.
 
-**hidden_cell_index** - index derived from 3D cell position in hidden layer
+**vc** — index of a cell within one visible/input column. Range `[0, vld.size.z)`.
 
-**count** - counter of number of inputs typically, used for normalization
+**hidden_column_index** — flat 2D index of a column in the hidden layer, derived via `address2(column_pos, ...)`.
 
-**radius** - receptive field radius
+**hidden_cells_start** — first flat index of the cells belonging to one hidden column: `hidden_column_index * hidden_size.z`.
 
-**diam** - receptive field diameter, diam = 2 * radius + 1
+**count** — number of visible columns that fall inside a receptive field, used for normalization.
 
-**area** - receptive field area, area = diam * diam
+**radius** — receptive field radius (stored in `VisibleLayerDesc::radius`).
 
-**h_to_v** - hidden to visible projection factors. Scale by this to go from hidden column position to visible column position using the project function
+**diam** — receptive field diameter: `2 * radius + 1`.
 
-**project** - function that scales positions between visible/hidden layers
+**area** — receptive field area: `diam * diam`.
 
-**visible_center** - center of the receptive field onto the input/visible layer
+**h_to_v** — `Float2` scale factors to project a hidden column position to a visible layer position, computed as `(vld.size.x / hidden_size.x, vld.size.y / hidden_size.y)`.
 
-**field_lower_bound** - lower bound of the receptive field, disregarding edge bounding (allows it to go over edge of CSDR)
+**visible_center** — the center of the receptive field on the visible layer, computed via `project(column_pos, h_to_v)`.
 
-**iter_lower_bound/iter_upper_bound** - lower and upper bounds of the receptive field, but with clamping to the edge of the CSDR
+**field_lower_bound** — lower corner of the receptive field before edge clamping: `visible_center - radius`.
 
-**hidden_stride** - amount of weight indices strided when the hidden cell index changes by 1, used for partial index calculation
+**iter_lower_bound / iter_upper_bound** — clamped iteration bounds, keeping the receptive field within the visible layer boundaries.
 
-**in_ci** - input column index, an element of the input/visible CSDR
+**in_ci** — the input column index: the active cell index read from the visible CSDR for a given visible column.
 
-**offset** - position into the receptive field, in range [0, diam) for both elements (x and y)
+**offset** — 2D position within the receptive field `[0, diam)` for both x and y.
 
-**wi_offset** - partially computed weight index, just missing the influence of the hidden cell
+**wi** — weight index: the final flat index into a weight buffer.
 
-**wi** - weight index, the final index into the weight matrix
+**wi_start** — partially computed weight index, missing only the final `hc` (hidden cell) term.
 
-**wi_start** - partially computed weight index, just missing the visible cell (vc) influence
+**wi_start_partial / wi_offset** — further partial weight index computations used for indexing weight tensors with multiple strides (e.g. in decoders, which also have a dendrite dimension).
 
-**max_index** - index of highest activation
+**max_index** — the column index (hc value) of the winning cell (highest activation).
 
-**max_activation** - the highest activation itself
+**max_activation** — the activation value of the winning cell.
 
-**total** - like count, but usually a float for doing softmax
+**total** — float normalization accumulator, typically a softmax denominator.
 
-**delta** - typically a weight increment
+**delta** — a weight increment (integer, before clamping).
 
-**state** - RNG state, or state needed for working memory, depending on where it is
+**state** — a local `u64` PCG32 RNG state for a single column's computation.
 
-## Actor
+**base_state** — a per-step seed drawn from the global RNG, used to derive deterministic per-column sub-seeds via `rand_get_state(base_state + column * RAND_SUBSEED_OFFSET)`.
 
-TODO
+## Encoder-specific
+
+**hidden_totals** — per-hidden-cell running sum of the weights from all active inputs. Used by ART vigilance matching. Stored in `VisibleLayer::hidden_totals: IntBuffer`.
+
+**hidden_totals_snapshot** — a clone of `hidden_totals` taken before the parallel forward pass begins, so all columns read a consistent snapshot. The actual `hidden_totals` are updated sequentially during the learn pass.
+
+**hidden_committed_flags** — per-hidden-cell flag (`ByteBuffer`, 0 or 1). A cell is "committed" once it has been selected and learned at least once. Uncommitted cells are treated as vigilance-pass candidates regardless of their match score.
+
+**hidden_learn_flags** — per-hidden-column flag indicating whether the winning cell for that column passed vigilance and should participate in the learn pass.
+
+**hidden_comparisons** — per-hidden-column activation value of the winning cell, used for lateral inhibition comparison across neighbouring columns.
+
+**l_radius** — lateral inhibition radius. Defines the neighbourhood over which a column's activation must be among the top `active_ratio` fraction in order to trigger weight updates.
+
+**active_ratio** — the fraction of columns within a lateral inhibition neighbourhood that are allowed to learn each step.
+
+## Decoder-specific
+
+**num_dendrites_per_cell** — number of dendrites attached to each hidden cell. Dendrites form two equal groups: the first half are inhibitory and the second half are excitatory.
+
+**dendrite_acts** — per-dendrite pre-activation accumulator, then reused to store the sigmoid of that pre-activation (for use in the backward pass).
+
+**dendrite_deltas** — per-dendrite integer weight gradient, computed during the learn pass.
+
+**hidden_acts** — per-hidden-cell softmax probability, stored after the forward pass for use in the learn pass.
+
+## Actor-specific
+
+**value_size** — number of cells in the value head's output column. The value function is represented as a distribution over `value_size` bins.
+
+**value_num_dendrites_per_cell** — dendrites per cell for the value head.
+
+**policy_num_dendrites_per_cell** — dendrites per cell for the policy head.
+
+**hidden_values** — per-hidden-column scalar value estimate (decoded from the value head's softmax distribution via `symexpf`).
+
+**hidden_td_scales** — per-column running maximum |TD error|, used to normalize the TD error for stable policy gradient updates.
+
+**history_samples** — `CircleBuffer<HistorySample>`. Each `HistorySample` stores `input_cis`, `hidden_target_cis_prev`, `hidden_values`, and `reward` for one past timestep.
+
+**vlr** — value function learning rate.
+
+**plr** — policy learning rate.
+
+**smoothing** — exponential smoothing factor mixed into the TD return.
+
+**discount** — RL discount factor (lambda). Must be in `[0.0, 1.0)`.
+
+**td_scale_decay** — decay rate for the running `hidden_td_scales` normalization term.
+
+**value_range** — range of the `symlog`/`symexp` value encoding.
+
+**min_steps** — minimum number of history steps before learning begins.
+
+**history_iters** — number of history timesteps replayed per learn call.
+
+**mimic** — passed to `step()`; a `f32` that blends supervised (imitation) signal into the policy gradient. `0.0` is pure RL.
 
 ## Hierarchy
 
-**ticks** - clocks for exponential memory
+**ticks** — per-layer clock counters for exponential memory. Not yet implemented in the Rust port.
 
-**ticks_per_update** - number of ticks before a layer activates
+**ticks_per_update** — number of ticks before a layer activates. Not yet implemented in the Rust port.
 
-**i_indices** - for mapping the decoders of the first layer to their corresponding input indices (io index)
+**i_indices** — flat buffer of length `num_io * 2`. The first `num_io` entries map decoder index → IO index. The second `num_io` entries map actor index → IO index.
 
-**d_indices** - for mapping the io indices to their corresponding decoders, if it exists (-1 otherwise)
+**d_indices** — per-IO-port decoder/actor index. `-1` if the port has no decoder or actor (`IoType::None`).
 
-**updates** - whether or not a layer "ticked" (updated) this step
+**updates** — per-layer boolean indicating whether a layer ticked (ran) this step. Not yet implemented in the Rust port.
 
-**io_types** - IO type of each IO layer index ("port")
+**io_types** — `Vec<u8>` storing the `IoType` discriminant for each IO port.
 
-**io_sizes** - size (Int3) of each IO layer ("port")
+**io_sizes** — `Vec<Int3>` storing the CSDR size for each IO port.
 
-**t** - time index
+**hidden_cis_prev** — the encoder hidden CIS from the previous timestep, used as the decoder's input during the learning pass.
 
-**i** - input index
+**feedback_cis_prev** — the decoder prediction from the layer above, from the previous timestep, used as the second input during the learning pass.
 
-**d** - decoder index
+**recurrent_importance** — scaling factor applied to a layer's recurrent input (the encoder's own previous hidden CIS). Set via `h.params.layers[l].recurrent_importance`.
+
+**anticipation** — when `true` (default), the hierarchy also runs a second forward+learn pass on decoders using the *current* encoder output (as opposed to only the previous-step encoder output). Stored in `h.params.anticipation`.
 
 ## Suffixes and Prefixes
 
-**prev** - indicates a value from the previous timestep
+**prev** — value from the previous timestep.
 
-**next** - indicates a value for the next timestep
+**next** — value intended for the next timestep.
 
-**base** - cached partial computation, typically for random sub-seeds (RNG)
+**base** — a cached seed value used to derive per-column RNG sub-seeds.
 
-**acts** - activations
+**acts** — activations buffer.
 
-**cis** - column indices
+**cis** — column indices (a CSDR buffer).
 
-**visible/input** - relating to the visible/input portion of an encoder/decoder
+**probs** — probabilities buffer (post-softmax activations).
 
-**hidden** - relating to the hidden/output portion of an encoder/decoder
+**size** — usually the 3D `Int3` size of a layer, or occasionally the byte count of a serialized object.
 
-**probs** - probabilities
+## Module-level letters (shorthand)
 
-**size** - usually used to count the size in bytes of an encoder/decoder/hierarchy/image_encoder for serialization
+**e** — encoder (in Hierarchy, `self.encoders`).
 
-**e** - encoder
+**d** — decoder (in Hierarchy, `self.decoders`; also `d_index` for decoder index within a layer).
 
-**d** - decoder
+**a** — actor (in Hierarchy, `self.actors`).
 
-**a** - actor
+**i** — IO port index.
+
+**l** — layer index.
+
+**t** — time index (into history buffer in Actor).
+
+**vli** — visible layer index (loop variable over `vl` / `vld` pairs).
 
 ## Misc
 
-**params** - paramters, kept separately from encoders/decoders so they can be shared
+**params** — runtime-adjustable parameters, kept separate from structural state. Accessed via `h.params.layers[l]` and `h.params.ios[i]`.
 
-**importance** - used to scale the relative influence of input/visible fields
+**importance** — scaling factor for a visible layer's contribution to encoder activations. Default `1.0`. Adjusted via `h.params.ios[i].importance` (IO inputs) or `h.params.layers[l].recurrent_importance` (recurrent input).

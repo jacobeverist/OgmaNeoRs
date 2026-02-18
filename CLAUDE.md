@@ -4,85 +4,86 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AOgmaNeo is a C++14 library implementing Sparse Predictive Hierarchies (SPH) — a biologically-inspired neural architecture. It targets desktop, embedded, and microcontroller (Arduino) platforms. Python bindings exist in the separate [PyAOgmaNeo](https://github.com/ogmacorp/PyAOgmaNeo) repo. Licensed CC BY-NC-SA 4.0.
+AOgmaNeo implements Sparse Predictive Hierarchies (SPH) — a biologically-inspired neural architecture. The **Rust port is the active codebase** at the repository root. The original C++ source is preserved in `cpp_ref/` for reference. Licensed CC BY-NC-SA 4.0.
 
-## Build Commands
+## Rust Codebase (Primary)
+
+### Build & Test
 
 ```bash
-# macOS (Apple Silicon) — set up OpenMP environment first
-brew install cmake
-brew install llvm
-brew install libomp
+# Build
+cargo build --release
+
+# Run all tests (6 integration tests)
+cargo test
+
+# Run a single test
+cargo test test_hierarchy_create_and_step
+
+# Run with output visible
+cargo test -- --nocapture
+
+# Lint (must be clean, 0 warnings)
+cargo clippy
+
+# Run the cartpole RL example
+cargo run --release --example cartpole
+```
+
+### Source Layout
+
+```
+src/
+  lib.rs           — module declarations only
+  helpers.rs       — Int2/Int3/Float2, PCG32 RNG, VecWriter/SliceReader, CircleBuffer
+  encoder.rs       — ART sparse coder (parallel via rayon)
+  decoder.rs       — multi-dendrite perceptrons (parallel via rayon)
+  actor.rs         — actor-critic RL with eligibility traces (sequential)
+  image_encoder.rs — SOM for image data, supports reconstruct()
+  hierarchy.rs     — top-level orchestrator
+tests/
+  smoke_test.rs    — 6 integration tests
+examples/
+  cartpole.rs      — CartPole RL demo
+```
+
+### Architecture
+
+**Hierarchy** is the user-facing entry point. It holds a stack of Encoder layers with associated Decoders and optional Actors.
+
+Configuration is split:
+- **Structural** (`IoDesc`, `LayerDesc`) — set at `init_random()` time; cannot change afterwards.
+- **Runtime** (`LayerParams` containing `DecoderParams`, `encoder::Params`) — adjustable anytime via `hierarchy.params`.
+
+`IoType` on each `IoDesc` determines behavior:
+- `None` — input-only (no decoder/actor)
+- `Prediction` — encoder + decoder predicts the IO's next state
+- `Action` — encoder + actor (RL); uses reward signal passed to `step()`
+
+`step(&[input_cis], learn, reward, mimic)` drives one timestep. `mimic` is `f32` (not `bool`).
+
+**Data representation**: all inputs/outputs are `Vec<i32>` of column indices (`cis`). A column index selects one active cell within each spatial column. Layer sizes are `Int3 { x, y, z }` where `x*y` is the number of columns and `z` is the column size (number of cells per column).
+
+**Parallelism**: Encoder and Decoder forward passes use `rayon` (`into_par_iter()`). Actor and ImageEncoder are sequential. Parallel kernels collect per-column results into `Vec<ForwardResult>` to avoid shared mutable state.
+
+**Serialization**: `VecWriter` / `SliceReader` do field-by-field little-endian I/O (not raw struct binary). Access the written bytes as `writer.data` (not `.into_bytes()`).
+
+**RNG**: thread-local PCG32 via `global_rand()`. Column kernels seed a local RNG with `rand_get_state(seed)` for deterministic per-column randomness.
+
+### Key Clippy Suppressions
+
+`#![allow(clippy::needless_range_loop)]` is at the top of every compute module. Private column kernels carry `#[allow(clippy::too_many_arguments)]`. These are intentional and should be preserved.
+
+## C++ Reference (`cpp_ref/`)
+
+Original C++ source under namespace `aon`. Useful when porting logic or verifying algorithm correctness. Build with CMake (requires OpenMP):
+
+```bash
+# macOS (Apple Silicon)
+brew install cmake llvm libomp
 source setup_env.sh
-
-# Standard build
 mkdir build && cd build
-cmake ..
-make
-
-# Install/uninstall
-make install
-make uninstall
-
-# Shared library (recommended for Python bindings on Linux)
-cmake .. -DBUILD_SHARED_LIBS=ON
+cmake .. && make
 ```
 
-Requires CMake 3.13+ and OpenMP. On macOS with Homebrew, `setup_env.sh` configures the LLVM/OpenMP paths.
-
-## Architecture
-
-All code lives in `source/aogmaneo/` under namespace `aon`. The library builds as a static library (`libAOgmaNeo.a`) by default.
-
-### Core Classes
-
-**Hierarchy** (`hierarchy.h/cpp`) — The top-level orchestrator. Coordinates a stack of Encoder/Decoder/Actor layers. Configured via `IO_Desc` (input/output ports) and `Layer_Desc` (hidden layers). Each IO port has a type: `none` (input-only), `prediction`, or `action` (RL). Runtime parameters are adjusted via `Hierarchy::Params`.
-
-**Encoder** (`encoder.h/cpp`) — Sparse coding layer using Adaptive Resonance Theory (ART). Computes sparse activations column-wise via vigilance matching + lateral inhibition. Uses 8-bit unsigned weights (`Byte_Buffer`).
-
-**Decoder** (`decoder.h/cpp`) — Predictive reconstruction layer with multi-dendrite perceptrons. Uses 8-bit signed weights (`S_Byte_Buffer`). Predicts input from hidden sparse representations.
-
-**Actor** (`actor.h/cpp`) — Reinforcement learning layer implementing actor-critic with eligibility traces and a circular history buffer for temporal credit assignment. Largest source file (~1000 lines).
-
-**Image_Encoder** (`image_encoder.h/cpp`) — Self-organizing map variant specialized for image data. Supports `reconstruct()` for decoding back to original resolution.
-
-### Data Flow
-
-```
-IO Inputs → Encoder[0] → Encoder[1] → ... → Encoder[N]
-                ↓              ↓                  ↓
-           Decoder[0]     Decoder[1]         Decoder[N]
-           Actor[0]*
-              ↓
-         Predictions/Actions
-```
-
-Layers support optional recurrent connections (controlled by `recurrent_radius` in `Layer_Desc`). Exponential memory is achieved via `ticks_per_update` — each layer processes at a different temporal stride.
-
-### Supporting Code
-
-**helpers.h/cpp** — Math functions (custom fast implementations or `USE_STD_MATH`), PCG32 RNG, activation functions (sigmoid, tanh, symlog/symexp), vector types (`Int2`, `Int3`, `Float2`, etc.), `Circle_Buffer`, stream serialization base classes.
-
-**array.h** — `Array<T>` (owning) and `Array_View<T>` (non-owning) container templates.
-
-### Key Type Aliases
-
-- `Byte_Buffer` / `S_Byte_Buffer` — 8-bit unsigned/signed weight storage
-- `Int_Buffer` / `Float_Buffer` — integer/float data buffers
-- `Int3` — `Vec3<int>`, used for layer sizes as (width, height, column_size)
-
-## Naming Conventions
-
-C++ uses Pascal case for structs (`Layer_Desc`) and snake_case for everything else. See `NameReference.md` for the full variable naming glossary. Key abbreviations: `vl` = visible layer, `hc` = hidden column, `ci` = column index, `cis` = column indices, `wi` = weight index, `diam` = diameter (2*radius+1).
-
-## Design Patterns
-
-- **Descriptor/Params separation**: Structural config (`IO_Desc`, `Layer_Desc`) set at creation; runtime params (`Encoder::Params`, `Decoder::Params`, `Actor::Params`) adjustable anytime via `hierarchy.params`.
-- **Column-wise parallelism**: All compute kernels operate per-column, parallelized with OpenMP via `PARALLEL_FOR` / `ATOMIC` macros. Gracefully degrades without OpenMP.
-- **8-bit weight quantization**: Encoder/Decoder use byte-sized weights for memory efficiency on embedded targets.
-- **Serialization**: All classes implement `write()`/`read()`, `write_state()`/`read_state()`, `write_weights()`/`read_weights()` via abstract `Stream_Writer`/`Stream_Reader` interfaces.
-
-## Compile Definitions
-
-- `USE_OMP` — Enables OpenMP parallelization (set in CMakeLists.txt)
-- `USE_STD_MATH` — Uses standard library math instead of custom fast-math implementations
+Key abbreviations used throughout C++ and Rust: `vl` = visible layer, `hc` = hidden column, `ci` = column index, `cis` = column indices, `wi` = weight index, `diam` = diameter (2×radius+1).
