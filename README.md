@@ -98,21 +98,14 @@ pip install gymnasium
 pip install "gymnasium[box2d]"   # needed for LunarLander
 ```
 
-**Run** — activate the venv so pyo3 picks it up automatically:
+**Run** — the examples automatically detect the `.venv` directory, so no activation is needed:
 
 ```bash
-source .venv/bin/activate
-
 cargo run --release --example cartpole_env_runner --features gymnasium-examples
 cargo run --release --example lunarlander --features gymnasium-examples
 ```
 
-Or point pyo3 at the venv interpreter directly without activating:
-
-```bash
-PYO3_PYTHON=.venv/bin/python3 cargo run --release --example cartpole_env_runner --features gymnasium-examples
-PYO3_PYTHON=.venv/bin/python3 cargo run --release --example lunarlander --features gymnasium-examples
-```
+The examples check `$VIRTUAL_ENV` (set by `source .venv/bin/activate`) and fall back to a `.venv` directory in the current working directory. Activating the venv first also works if you prefer.
 
 ---
 

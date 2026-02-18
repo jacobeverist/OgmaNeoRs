@@ -12,6 +12,26 @@ use aogmaneo::helpers::Int3;
 use aogmaneo::hierarchy::{Hierarchy, IoDesc, IoType, LayerDesc};
 use pyo3::prelude::*;
 
+/// Add the venv's site-packages to sys.path so gymnasium is importable when
+/// running via `cargo run` without manually activating the venv first.
+/// Checks $VIRTUAL_ENV (set by `source .venv/bin/activate`) then falls back
+/// to a `.venv` directory in the current working directory.
+fn activate_venv(py: Python<'_>) -> PyResult<()> {
+    let venv = std::env::var("VIRTUAL_ENV").ok().or_else(|| {
+        let p = std::path::Path::new(".venv");
+        if p.is_dir() { Some(".venv".to_string()) } else { None }
+    });
+    if let Some(venv_path) = venv {
+        let v = py.version_info();
+        let site_pkgs = format!("{}/lib/python{}.{}/site-packages", venv_path, v.major, v.minor);
+        py.run_bound(
+            &format!("import sys; sys.path.insert(0, r'{site_pkgs}') if r'{site_pkgs}' not in sys.path else None"),
+            None, None,
+        )?;
+    }
+    Ok(())
+}
+
 /// Sigmoid squashing function: maps any real to (0, 1).
 fn sigmoid(x: f32) -> f32 {
     (x * 0.5).tanh() * 0.5 + 0.5
@@ -91,6 +111,7 @@ fn main() -> PyResult<()> {
     println!("{}", "-".repeat(50));
 
     Python::with_gil(|py| -> PyResult<()> {
+        activate_venv(py)?;
         let gym = py.import_bound("gymnasium")?;
         let env = gym.call_method1("make", ("CartPole-v1",))?;
 
