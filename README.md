@@ -157,10 +157,50 @@ examples/
   wave_prediction.rs      — wavy-line sequence prediction (pure Rust)
   cartpole_env_runner.rs  — CartPole-v1 via gymnasium (requires --features gymnasium-examples)
   lunarlander.rs          — LunarLander-v3 via gymnasium (requires --features gymnasium-examples)
-cpp_ref/           — original C++ source (reference only)
-python_ref/        — original Python examples using PyAOgmaNeo (reference only)
 doc/               — documentation
 ```
+
+## C++ Reference Code (MacOS)
+
+Original C++ source found in [AOgmaNeo](https://github.com/ogmacorp/AOgmaNeo/tree/645a54ace656b0ac2476a56a0dac19faacbd87ab).  We can build the reference code to verify algorithm correctness.
+
+I found that I need to jump through a couple hoops to build this on MacOS (Apple Silicon).  It requires both CMake, OpenMP, and LLVM to be installed.
+
+```bash
+# macOS (Apple Silicon)
+brew install cmake llvm libomp
+```
+
+Setup environment variables:
+
+```bash
+export OpenMP_ROOT=$(brew --prefix)/opt/libomp
+export CPPFLAGS="-I/opt/homebrew/include"
+export LDFLAGS="-L/opt/homebrew/lib"
+export CPPFLAGS="${CPPFLAGS} -I${OpenMP_ROOT}/include"
+export LDFLAGS="${LDFLAGS} -L${OpenMP_ROOT}/lib"
+export CC=/opt/homebrew/opt/llvm/bin/clang
+export CXX=/opt/homebrew/opt/llvm/bin/clang++
+```
+
+Run CMake and build:
+
+```bash
+mkdir build && cd build
+cmake .. && make
+```
+
+### C++ to Rust Correspondence
+
+Key abbreviations used throughout C++ and Rust:
+- `vl` = visible layer
+- `hc` = hidden column
+- `ci` = column index
+- `cis` = column indices
+- `wi` = weight index
+- `diam` = diameter (2×radius+1).
+
+Further notes on the correspondence can be found in [CppToRust.md](doc/CppToRust.md).
 
 ---
 
