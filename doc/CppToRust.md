@@ -1,6 +1,6 @@
 # AOgmaNeo: C++ to Rust Reference
 
-This document maps the original C++ AOgmaNeo library (preserved in `cpp_ref/`) to the Rust port (in `src/`). Use it when reading C++ documentation or source and working in the Rust codebase.
+This document maps the original C++ AOgmaNeo library (preserved in  [AOgmaNeo](https://github.com/ogmacorp/AOgmaNeo/tree/645a54ace656b0ac2476a56a0dac19faacbd87ab)) to the Rust port (in `src/`). Use it when reading C++ documentation or source and working in the Rust codebase.
 
 ---
 
