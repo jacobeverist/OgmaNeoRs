@@ -4,30 +4,33 @@
 use rayon::prelude::*;
 use crate::helpers::*;
 
-#[derive(Clone, Debug)]
-pub struct VisibleLayerDesc {
-    pub size: Int3,
-    pub radius: i32,
-}
+/// Re-export the shared visible-layer descriptor for decoder use.
+pub use crate::helpers::VisibleLayerDesc;
 
-impl Default for VisibleLayerDesc {
-    fn default() -> Self {
-        Self {
-            size: Int3::new(5, 5, 16),
-            radius: 2,
-        }
-    }
-}
-
+/// Internal state of one visible (input) connection to the decoder.
 #[derive(Clone, Debug, Default)]
 pub struct VisibleLayer {
+    /// Synaptic weights, stored as `i8` in `[-127, 127]`.
+    ///
+    /// Layout: `weights[di + num_dendrites * (hc + num_hc * (dy + diam * (dx + diam * (in_ci + z * col))))]`
     pub weights: SByteBuffer,
 }
 
+/// Hyperparameters for the [`Decoder`].
 #[derive(Clone, Debug)]
 pub struct Params {
+    /// Input scale applied before the softplus nonlinearity. Larger values
+    /// sharpen the dendrite responses.
+    /// Range: `(0.0, ∞)`. Default: `8.0`.
     pub scale: f32,
+    /// Learning rate for weight updates.
+    /// Range: `[0.0, 1.0]`. Default: `0.1`.
     pub lr: f32,
+    /// Leaky-ReLU coefficient applied to the negative softplus branch of each
+    /// dendrite: `activation = softplus(x) - leak * softplus(-x)`.
+    /// A value of `0.0` gives standard (non-leaky) softplus.
+    /// Range: `[0.0, 1.0]`. Default: `0.01`.
+    pub leak: f32,
 }
 
 impl Default for Params {
@@ -35,10 +38,22 @@ impl Default for Params {
         Self {
             scale: 8.0,
             lr: 0.1,
+            leak: 0.01,
         }
     }
 }
 
+/// Multi-dendrite perceptron decoder for predicting discrete column indices.
+///
+/// Each hidden column has `num_dendrites_per_cell` dendrites per cell. The
+/// first half of dendrites contribute positively and the second half negatively
+/// (push-pull arrangement), which enables a form of divisive normalisation.
+///
+/// The forward pass produces a softmax probability distribution over the
+/// `hidden_size.z` possible column indices, from which the argmax is taken as
+/// the prediction.
+///
+/// The forward pass is parallelised across hidden columns using [`rayon`].
 #[derive(Clone, Debug, Default)]
 pub struct Decoder {
     hidden_size: Int3,
@@ -47,7 +62,9 @@ pub struct Decoder {
     hidden_acts: FloatBuffer,
     dendrite_acts: FloatBuffer,
     dendrite_deltas: IntBuffer,
+    /// Internal state for each visible connection.
     pub visible_layers: Vec<VisibleLayer>,
+    /// Structural descriptors (size, radius) for each visible connection.
     pub visible_layer_descs: Vec<VisibleLayerDesc>,
 }
 
@@ -147,9 +164,10 @@ impl Decoder {
 
             for di in 0..num_dendrites_per_cell {
                 let act = dendrite_acts[dendrites_start + di] * dendrite_scale;
-                dendrite_acts[dendrites_start + di] = sigmoidf(act); // store derivative
-                activation += softplusf(act)
-                    * (if di >= half_num { 2.0 } else { 0.0 } - 1.0);
+                // Store sigmoid(act) for use during learning (derivative)
+                dendrite_acts[dendrites_start + di] = sigmoidf(act);
+                let leaky = softplusf(act) - params.leak * softplusf(-act);
+                activation += leaky * (if di >= half_num { 2.0 } else { 0.0 } - 1.0);
             }
 
             activation *= activation_scale;
@@ -271,6 +289,12 @@ impl Decoder {
         }
     }
 
+    /// Initialise the decoder with random weights.
+    ///
+    /// - `hidden_size` — spatial grid and vocabulary size of the predicted layer.
+    /// - `num_dendrites_per_cell` — number of dendrites per cell (must be even;
+    ///   first half are positive, second half are negative).
+    /// - `visible_layer_descs` — descriptors for the input connections.
     pub fn init_random(
         &mut self,
         hidden_size: Int3,
@@ -310,6 +334,9 @@ impl Decoder {
         self.dendrite_deltas = vec![0i32; num_dendrites];
     }
 
+    /// Run the forward pass, updating `hidden_cis` and `hidden_acts`.
+    ///
+    /// Call [`Decoder::learn`] immediately afterwards to update weights.
     pub fn activate(&mut self, input_cis: &[&[i32]], params: &Params) {
         let num_hidden_columns = (self.hidden_size.x * self.hidden_size.y) as usize;
         let hidden_size = self.hidden_size;
@@ -345,6 +372,10 @@ impl Decoder {
         }
     }
 
+    /// Run one learning step using the targets in `hidden_target_cis`.
+    ///
+    /// [`activate`](Self::activate) should be called before `learn` to populate
+    /// the dendrite activations used for weight updates.
     pub fn learn(
         &mut self,
         input_cis: &[&[i32]],
@@ -382,36 +413,45 @@ impl Decoder {
         }
     }
 
+    /// Reset hidden CIs and activations to zero.
     pub fn clear_state(&mut self) {
         self.hidden_cis.fill(0);
         self.hidden_acts.fill(0.0);
     }
 
+    /// Return the current hidden column-index predictions.
     pub fn get_hidden_cis(&self) -> &[i32] {
         &self.hidden_cis
     }
 
+    /// Return the current softmax activation probabilities (one per hidden cell).
     pub fn get_hidden_acts(&self) -> &[f32] {
         &self.hidden_acts
     }
 
+    /// Return the spatial size of the hidden (predicted) layer.
     pub fn get_hidden_size(&self) -> Int3 {
         self.hidden_size
     }
 
+    /// Return the number of visible (input) connections.
     pub fn get_num_visible_layers(&self) -> usize {
         self.visible_layers.len()
     }
 
+    /// Return a reference to visible layer `i`.
     pub fn get_visible_layer(&self, i: usize) -> &VisibleLayer {
         &self.visible_layers[i]
     }
 
+    /// Return the descriptor for visible layer `i`.
     pub fn get_visible_layer_desc(&self, i: usize) -> &VisibleLayerDesc {
         &self.visible_layer_descs[i]
     }
 
     // Serialization
+
+    /// Serialise the full decoder (weights + state) to a [`StreamWriter`].
     pub fn write(&self, writer: &mut dyn StreamWriter) {
         writer.write_int3(self.hidden_size);
         writer.write_i32(self.num_dendrites_per_cell as i32);
@@ -427,6 +467,7 @@ impl Decoder {
         }
     }
 
+    /// Deserialise the decoder from a [`StreamReader`].
     pub fn read(&mut self, reader: &mut dyn StreamReader) {
         self.hidden_size = reader.read_int3();
         self.num_dendrites_per_cell = reader.read_i32() as usize;
@@ -467,24 +508,28 @@ impl Decoder {
         }
     }
 
+    /// Serialise only the hidden state (CIs and activations).
     pub fn write_state(&self, writer: &mut dyn StreamWriter) {
         writer.write_i32_slice(&self.hidden_cis);
         writer.write_f32_slice(&self.hidden_acts);
         writer.write_f32_slice(&self.dendrite_acts);
     }
 
+    /// Deserialise only the hidden state.
     pub fn read_state(&mut self, reader: &mut dyn StreamReader) {
         reader.read_i32_slice(&mut self.hidden_cis);
         reader.read_f32_slice(&mut self.hidden_acts);
         reader.read_f32_slice(&mut self.dendrite_acts);
     }
 
+    /// Serialise only the synaptic weights.
     pub fn write_weights(&self, writer: &mut dyn StreamWriter) {
         for vl in &self.visible_layers {
             writer.write_i8_slice(&vl.weights);
         }
     }
 
+    /// Deserialise only the synaptic weights.
     pub fn read_weights(&mut self, reader: &mut dyn StreamReader) {
         for vl in &mut self.visible_layers {
             reader.read_i8_slice(&mut vl.weights);

@@ -116,6 +116,7 @@ fn main() {
             up_radius: 2,
             recurrent_radius: 2,
             down_radius: 2,
+            ticks_per_update: 1,
         },
         LayerDesc {
             hidden_size: Int3::new(4, 4, num_bins),
@@ -123,6 +124,7 @@ fn main() {
             up_radius: 2,
             recurrent_radius: 2,
             down_radius: 2,
+            ticks_per_update: 2,
         },
     ];
 

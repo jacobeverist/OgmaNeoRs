@@ -3,45 +3,64 @@
 
 use crate::helpers::*;
 
-#[derive(Clone, Debug)]
-pub struct VisibleLayerDesc {
-    pub size: Int3,
-    pub radius: i32,
-}
+/// Re-export the shared visible-layer descriptor for actor use.
+pub use crate::helpers::VisibleLayerDesc;
 
-impl Default for VisibleLayerDesc {
-    fn default() -> Self {
-        Self {
-            size: Int3::new(5, 5, 16),
-            radius: 2,
-        }
-    }
-}
-
+/// Internal state of one visible (input) connection to the actor.
 #[derive(Clone, Debug, Default)]
 pub struct VisibleLayer {
+    /// Float weights for the value (critic) network.
     pub value_weights: FloatBuffer,
+    /// Float weights for the policy (actor) network.
     pub policy_weights: FloatBuffer,
 }
 
+/// One element in the actor's experience replay buffer.
 #[derive(Clone, Debug, Default)]
 pub struct HistorySample {
+    /// Input CIs at this timestep, one slice per visible layer.
     pub input_cis: Vec<IntBuffer>,
+    /// Previous timestep's target (taken) action CIs.
     pub hidden_target_cis_prev: IntBuffer,
+    /// Value estimates at this timestep (one per hidden column).
     pub hidden_values: FloatBuffer,
+    /// Reward received at this timestep.
     pub reward: f32,
 }
 
+/// Hyperparameters for the [`Actor`].
 #[derive(Clone, Debug)]
 pub struct Params {
+    /// Value (critic) learning rate.
+    /// Range: `[0.0, 1.0]`. Default: `0.1`.
     pub vlr: f32,
+    /// Policy (actor) learning rate.
+    /// Range: `[0.0, 1.0]`. Default: `0.01`.
     pub plr: f32,
+    /// Smoothing factor for the TD return blend. Controls how much weight is
+    /// given to the multi-step return vs. the current value estimate.
+    /// Range: `[0.0, 1.0]`. Default: `0.02`.
     pub smoothing: f32,
+    /// Discount factor γ for future rewards.
+    /// Range: `[0.0, 1.0]`. Default: `0.99`.
     pub discount: f32,
+    /// Per-step decay of the TD-error scale normaliser.
+    /// Range: `[0.0, 1.0]`. Default: `0.999`.
     pub td_scale_decay: f32,
+    /// Symmetric log / exp value range. Rewards are mapped into
+    /// `[-value_range, value_range]` via [`symlogf`].
+    /// Default: `10.0`.
     pub value_range: f32,
+    /// Minimum number of history steps before learning starts.
+    /// Default: `16`.
     pub min_steps: usize,
+    /// Number of random history samples used per learning call.
+    /// Default: `8`.
     pub history_iters: usize,
+    /// Leaky-ReLU coefficient for dendrite activations:
+    /// `activation = softplus(x) - leak * softplus(-x)`.
+    /// Range: `[0.0, 1.0]`. Default: `0.01`.
+    pub leak: f32,
 }
 
 impl Default for Params {
@@ -55,10 +74,22 @@ impl Default for Params {
             value_range: 10.0,
             min_steps: 16,
             history_iters: 8,
+            leak: 0.01,
         }
     }
 }
 
+/// Actor-critic reinforcement learning module.
+///
+/// Combines a policy network (actor) and a value network (critic), both
+/// implemented as multi-dendrite perceptrons, inside a single module.
+/// Learning uses a temporal-difference return with a circular replay buffer.
+///
+/// Actions are sampled from the policy's softmax distribution; during mimic
+/// learning, an external target CI is provided via the `mimic` signal in
+/// [`step`](Self::step).
+///
+/// The forward pass is sequential (the actor is not parallelised with rayon).
 #[derive(Clone, Debug, Default)]
 pub struct Actor {
     hidden_size: Int3,
@@ -74,7 +105,9 @@ pub struct Actor {
     hidden_values: FloatBuffer,
     hidden_td_scales: FloatBuffer,
     history_samples: CircleBuffer<HistorySample>,
+    /// Internal state for each visible connection.
     pub visible_layers: Vec<VisibleLayer>,
+    /// Structural descriptors (size, radius) for each visible connection.
     pub visible_layer_descs: Vec<VisibleLayerDesc>,
 }
 
@@ -190,7 +223,8 @@ impl Actor {
 
             for di in 0..self.value_num_dendrites_per_cell {
                 let act = self.value_dendrite_acts[di + value_dendrites_start] * dendrite_scale;
-                activation += softplusf(act) * (if di >= half_value_num { 2.0 } else { 0.0 } - 1.0);
+                let leaky = softplusf(act) - params.leak * softplusf(-act);
+                activation += leaky * (if di >= half_value_num { 2.0 } else { 0.0 } - 1.0);
             }
 
             activation *= value_activation_scale;
@@ -231,8 +265,8 @@ impl Actor {
 
             for di in 0..self.policy_num_dendrites_per_cell {
                 let act = self.policy_dendrite_acts[di + policy_dendrites_start] * dendrite_scale;
-                activation +=
-                    softplusf(act) * (if di >= half_policy_num { 2.0 } else { 0.0 } - 1.0);
+                let leaky = softplusf(act) - params.leak * softplusf(-act);
+                activation += leaky * (if di >= half_policy_num { 2.0 } else { 0.0 } - 1.0);
             }
 
             activation *= policy_activation_scale;
@@ -393,8 +427,8 @@ impl Actor {
             for di in 0..self.value_num_dendrites_per_cell {
                 let act = self.value_dendrite_acts[di + value_dendrites_start] * dendrite_scale;
                 self.value_dendrite_acts[di + value_dendrites_start] = sigmoidf(act); // store deriv
-                activation +=
-                    softplusf(act) * (if di >= half_value_num { 2.0 } else { 0.0 } - 1.0);
+                let leaky = softplusf(act) - params.leak * softplusf(-act);
+                activation += leaky * (if di >= half_value_num { 2.0 } else { 0.0 } - 1.0);
             }
 
             activation *= value_activation_scale;
@@ -435,8 +469,8 @@ impl Actor {
                 let act =
                     self.policy_dendrite_acts[di + policy_dendrites_start] * dendrite_scale;
                 self.policy_dendrite_acts[di + policy_dendrites_start] = sigmoidf(act);
-                activation +=
-                    softplusf(act) * (if di >= half_policy_num { 2.0 } else { 0.0 } - 1.0);
+                let leaky = softplusf(act) - params.leak * softplusf(-act);
+                activation += leaky * (if di >= half_policy_num { 2.0 } else { 0.0 } - 1.0);
             }
 
             activation *= policy_activation_scale;
@@ -559,6 +593,14 @@ impl Actor {
         }
     }
 
+    /// Initialise the actor with random weights.
+    ///
+    /// - `hidden_size` — spatial grid and action vocabulary size.
+    /// - `value_size` — number of discrete value bins for the critic head.
+    /// - `value_num_dendrites_per_cell` — dendrites per value cell (must be even).
+    /// - `policy_num_dendrites_per_cell` — dendrites per policy cell (must be even).
+    /// - `history_capacity` — number of past timesteps to keep for replay.
+    /// - `visible_layer_descs` — descriptors for the input connections.
     pub fn init_random(
         &mut self,
         hidden_size: Int3,
@@ -580,6 +622,7 @@ impl Actor {
         let value_num_dendrites = num_value_cells * value_num_dendrites_per_cell;
         let policy_num_dendrites = num_hidden_cells * policy_num_dendrites_per_cell;
 
+        // Use the shared global RNG (same as encoder/decoder/image_encoder)
         self.visible_layers = self
             .visible_layer_descs
             .iter()
@@ -588,21 +631,11 @@ impl Actor {
                 let area = (diam * diam) as usize;
 
                 let value_weights: FloatBuffer = (0..value_num_dendrites * area * vld.size.z as usize)
-                    .map(|_| {
-                        let mut state = GLOBAL_STATE_FOR_INIT.with(|s| s.get());
-                        let v = randf_range_step(-INIT_WEIGHT_NOISEF, INIT_WEIGHT_NOISEF, &mut state);
-                        GLOBAL_STATE_FOR_INIT.with(|s| s.set(state));
-                        v
-                    })
+                    .map(|_| (global_randf() * 2.0 - 1.0) * INIT_WEIGHT_NOISEF)
                     .collect();
 
                 let policy_weights: FloatBuffer = (0..policy_num_dendrites * area * vld.size.z as usize)
-                    .map(|_| {
-                        let mut state = GLOBAL_STATE_FOR_INIT.with(|s| s.get());
-                        let v = randf_range_step(-INIT_WEIGHT_NOISEF, INIT_WEIGHT_NOISEF, &mut state);
-                        GLOBAL_STATE_FOR_INIT.with(|s| s.set(state));
-                        v
-                    })
+                    .map(|_| (global_randf() * 2.0 - 1.0) * INIT_WEIGHT_NOISEF)
                     .collect();
 
                 VisibleLayer {
@@ -639,6 +672,17 @@ impl Actor {
         }
     }
 
+    /// Run one actor step: forward pass, history push, and optional learning.
+    ///
+    /// - `input_cis` — current observation as CI slices (one per visible layer).
+    /// - `hidden_target_cis_prev` — the action taken at the previous timestep
+    ///   (used as the learning target).
+    /// - `learn_enabled` — if `false`, learning is skipped.
+    /// - `reward` — scalar reward received at this timestep.
+    /// - `mimic` — non-zero to apply an additional cross-entropy loss towards
+    ///   `hidden_target_cis_prev` (imitation learning signal). Pass `0.0` for
+    ///   pure RL.
+    /// - `params` — hyperparameters for this step.
     pub fn step(
         &mut self,
         input_cis: &[&[i32]],
@@ -697,49 +741,61 @@ impl Actor {
         }
     }
 
+    /// Reset hidden CIs, value estimates, and history to zero.
     pub fn clear_state(&mut self) {
         self.hidden_cis.fill(0);
         self.hidden_values.fill(0.0);
         self.history_size = 0;
     }
 
+    /// Return the current selected action CIs (one per hidden column).
     pub fn get_hidden_cis(&self) -> &[i32] {
         &self.hidden_cis
     }
 
+    /// Return the current policy activation probabilities (one per hidden cell).
     pub fn get_hidden_acts(&self) -> &[f32] {
         &self.hidden_policy_acts
     }
 
+    /// Return the current value estimates (one per hidden column).
     pub fn get_hidden_values(&self) -> &[f32] {
         &self.hidden_values
     }
 
+    /// Return the spatial size of the hidden (action) layer.
     pub fn get_hidden_size(&self) -> Int3 {
         self.hidden_size
     }
 
+    /// Return the maximum number of history samples stored.
     pub fn get_history_capacity(&self) -> usize {
         self.history_samples.len()
     }
 
+    /// Return the number of history samples currently populated.
     pub fn get_history_size(&self) -> usize {
         self.history_size
     }
 
+    /// Return the number of visible (input) connections.
     pub fn get_num_visible_layers(&self) -> usize {
         self.visible_layers.len()
     }
 
+    /// Return a reference to visible layer `i`.
     pub fn get_visible_layer(&self, i: usize) -> &VisibleLayer {
         &self.visible_layers[i]
     }
 
+    /// Return the descriptor for visible layer `i`.
     pub fn get_visible_layer_desc(&self, i: usize) -> &VisibleLayerDesc {
         &self.visible_layer_descs[i]
     }
 
     // Serialization
+
+    /// Serialise the full actor (weights + state + history) to a [`StreamWriter`].
     pub fn write(&self, writer: &mut dyn StreamWriter) {
         writer.write_int3(self.hidden_size);
         writer.write_i32(self.value_size as i32);
@@ -772,6 +828,7 @@ impl Actor {
         }
     }
 
+    /// Deserialise the actor from a [`StreamReader`].
     pub fn read(&mut self, reader: &mut dyn StreamReader) {
         self.hidden_size = reader.read_int3();
         self.value_size = reader.read_i32() as usize;
@@ -850,6 +907,7 @@ impl Actor {
         }
     }
 
+    /// Serialise only the actor's transient state (CIs, values, history).
     pub fn write_state(&self, writer: &mut dyn StreamWriter) {
         writer.write_i32_slice(&self.hidden_cis);
         writer.write_f32_slice(&self.hidden_values);
@@ -867,6 +925,7 @@ impl Actor {
         }
     }
 
+    /// Deserialise only the actor's transient state.
     pub fn read_state(&mut self, reader: &mut dyn StreamReader) {
         reader.read_i32_slice(&mut self.hidden_cis);
         reader.read_f32_slice(&mut self.hidden_values);
@@ -884,6 +943,7 @@ impl Actor {
         }
     }
 
+    /// Serialise only the synaptic weights.
     pub fn write_weights(&self, writer: &mut dyn StreamWriter) {
         for vl in &self.visible_layers {
             writer.write_f32_slice(&vl.value_weights);
@@ -891,15 +951,11 @@ impl Actor {
         }
     }
 
+    /// Deserialise only the synaptic weights.
     pub fn read_weights(&mut self, reader: &mut dyn StreamReader) {
         for vl in &mut self.visible_layers {
             reader.read_f32_slice(&mut vl.value_weights);
             reader.read_f32_slice(&mut vl.policy_weights);
         }
     }
-}
-
-// Thread-local state for weight initialization
-thread_local! {
-    static GLOBAL_STATE_FOR_INIT: std::cell::Cell<u64> = std::cell::Cell::new(rand_get_state(54321));
 }

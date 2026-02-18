@@ -4,29 +4,25 @@
 use rayon::prelude::*;
 use crate::helpers::*;
 
-#[derive(Clone, Debug)]
-pub struct VisibleLayerDesc {
-    pub size: Int3,
-    pub radius: i32,
-}
+/// Re-export the shared visible-layer descriptor for encoder use.
+pub use crate::helpers::VisibleLayerDesc;
 
-impl Default for VisibleLayerDesc {
-    fn default() -> Self {
-        Self {
-            size: Int3::new(5, 5, 16),
-            radius: 2,
-        }
-    }
-}
-
+/// Internal state of one visible (input) connection to the encoder.
 #[derive(Clone, Debug, Default)]
 pub struct VisibleLayer {
+    /// Synaptic weights, stored as `u8` in `[0, 255]`.
+    ///
+    /// Layout: `weights[hc + num_hc * (dy + diam * (dx + diam * (in_ci + z * hidden_col)))]`
     pub weights: ByteBuffer,
+    /// Running sum of weights for each hidden cell (used for ART match computation).
     pub hidden_totals: IntBuffer,
+    /// Relative importance of this visible layer in the combined activation.
+    /// Default: `1.0`. Higher values give this input more influence.
     pub importance: f32,
 }
 
 impl VisibleLayer {
+    /// Create a new, empty [`VisibleLayer`] with importance `1.0`.
     pub fn new() -> Self {
         Self {
             weights: Vec::new(),
@@ -36,12 +32,27 @@ impl VisibleLayer {
     }
 }
 
+/// Hyperparameters for the [`Encoder`].
 #[derive(Clone, Debug)]
 pub struct Params {
+    /// ART choice function denominator bias. Prevents division by zero and
+    /// controls the preference between uncommitted and committed nodes.
+    /// Range: `(0.0, ∞)`. Default: `0.01`.
     pub choice: f32,
+    /// ART vigilance threshold. A committed node is only selected if its match
+    /// ratio (overlap / expected) exceeds this value.
+    /// Range: `[0.0, 1.0]`. Default: `0.9`.
     pub vigilance: f32,
+    /// Learning rate applied to committed nodes. Uncommitted nodes always learn
+    /// at rate `1.0` (fast commit).
+    /// Range: `[0.0, 1.0]`. Default: `0.5`.
     pub lr: f32,
+    /// Maximum fraction of the lateral neighbourhood that may have a higher
+    /// match score than the winner. Controls effective sparsity.
+    /// Range: `[0.0, 1.0]`. Default: `0.1`.
     pub active_ratio: f32,
+    /// Radius (in hidden columns) of the lateral inhibition neighbourhood.
+    /// Default: `2`.
     pub l_radius: i32,
 }
 
@@ -64,6 +75,14 @@ struct ForwardResult {
     comparison: f32,
 }
 
+/// Adaptive Resonance Theory (ART) sparse coder.
+///
+/// The encoder maps a collection of discrete column-index (CI) inputs from one
+/// or more visible layers to a single discrete CI output per hidden column.
+/// Learning is unsupervised: each column independently performs competitive
+/// learning with a vigilance gate that prevents over-generalisation.
+///
+/// The forward pass is parallelised across hidden columns using [`rayon`].
 #[derive(Clone, Debug, Default)]
 pub struct Encoder {
     hidden_size: Int3,
@@ -71,7 +90,9 @@ pub struct Encoder {
     hidden_learn_flags: ByteBuffer,
     hidden_committed_flags: ByteBuffer,
     hidden_comparisons: FloatBuffer,
+    /// Internal state for each visible connection.
     pub visible_layers: Vec<VisibleLayer>,
+    /// Structural descriptors (size, radius) for each visible connection.
     pub visible_layer_descs: Vec<VisibleLayerDesc>,
 }
 
@@ -194,6 +215,10 @@ impl Encoder {
         }
     }
 
+    /// Initialise the encoder with random weights.
+    ///
+    /// - `hidden_size` — spatial grid size `(x, y)` and column vocabulary `z`.
+    /// - `visible_layer_descs` — one descriptor per visible (input) connection.
     pub fn init_random(
         &mut self,
         hidden_size: Int3,
@@ -231,6 +256,12 @@ impl Encoder {
         self.hidden_comparisons = vec![0.0f32; num_hidden_columns];
     }
 
+    /// Run one forward (and optionally learn) step.
+    ///
+    /// - `input_cis` — one CI slice per visible layer, in the same order as
+    ///   `visible_layer_descs`.
+    /// - `learn_enabled` — if `false`, only the forward pass runs (no weight updates).
+    /// - `params` — hyperparameters for this step.
     pub fn step(&mut self, input_cis: &[&[i32]], learn_enabled: bool, params: &Params) {
         let num_hidden_columns = (self.hidden_size.x * self.hidden_size.y) as usize;
         let hidden_size = self.hidden_size;
@@ -379,35 +410,44 @@ impl Encoder {
         }
     }
 
+    /// Reset the hidden CIs to zero (column 0 in each column).
     pub fn clear_state(&mut self) {
         self.hidden_cis.fill(0);
     }
 
+    /// Return the current hidden column-index array (one entry per hidden column).
     pub fn get_hidden_cis(&self) -> &[i32] {
         &self.hidden_cis
     }
 
+    /// Return the spatial size of the hidden layer.
     pub fn get_hidden_size(&self) -> Int3 {
         self.hidden_size
     }
 
+    /// Return the number of visible (input) connections.
     pub fn get_num_visible_layers(&self) -> usize {
         self.visible_layers.len()
     }
 
+    /// Return a reference to visible layer `i`.
     pub fn get_visible_layer(&self, i: usize) -> &VisibleLayer {
         &self.visible_layers[i]
     }
 
+    /// Return a mutable reference to visible layer `i`.
     pub fn get_visible_layer_mut(&mut self, i: usize) -> &mut VisibleLayer {
         &mut self.visible_layers[i]
     }
 
+    /// Return the descriptor for visible layer `i`.
     pub fn get_visible_layer_desc(&self, i: usize) -> &VisibleLayerDesc {
         &self.visible_layer_descs[i]
     }
 
     // Serialization
+
+    /// Serialise the full encoder (weights + state) to a [`StreamWriter`].
     pub fn write(&self, writer: &mut dyn StreamWriter) {
         writer.write_int3(self.hidden_size);
         writer.write_i32_slice(&self.hidden_cis);
@@ -423,6 +463,7 @@ impl Encoder {
         }
     }
 
+    /// Deserialise the encoder from a [`StreamReader`].
     pub fn read(&mut self, reader: &mut dyn StreamReader) {
         self.hidden_size = reader.read_int3();
 
@@ -467,20 +508,24 @@ impl Encoder {
         }
     }
 
+    /// Serialise only the hidden CIs (fast partial save).
     pub fn write_state(&self, writer: &mut dyn StreamWriter) {
         writer.write_i32_slice(&self.hidden_cis);
     }
 
+    /// Deserialise only the hidden CIs.
     pub fn read_state(&mut self, reader: &mut dyn StreamReader) {
         reader.read_i32_slice(&mut self.hidden_cis);
     }
 
+    /// Serialise only the synaptic weights.
     pub fn write_weights(&self, writer: &mut dyn StreamWriter) {
         for vl in &self.visible_layers {
             writer.write_u8_slice(&vl.weights);
         }
     }
 
+    /// Deserialise only the synaptic weights.
     pub fn read_weights(&mut self, reader: &mut dyn StreamReader) {
         for vl in &mut self.visible_layers {
             reader.read_u8_slice(&mut vl.weights);
