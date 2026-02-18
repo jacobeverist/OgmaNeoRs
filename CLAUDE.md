@@ -14,7 +14,7 @@ AOgmaNeo implements Sparse Predictive Hierarchies (SPH) — a biologically-inspi
 # Build
 cargo build --release
 
-# Run all tests (6 integration tests)
+# Run all tests (10 integration tests + 5 doc tests)
 cargo test
 
 # Run a single test
@@ -26,9 +26,26 @@ cargo test -- --nocapture
 # Lint (must be clean, 0 warnings)
 cargo clippy
 
-# Run the cartpole RL example
+# Pure-Rust examples (no extra deps)
 cargo run --release --example cartpole
+cargo run --release --example wave_prediction
+
+# Gymnasium examples — requires Python venv (see below)
+PYO3_PYTHON=.venv/bin/python3 cargo build --release --features gymnasium-examples
+cargo run --release --example cartpole_env_runner --features gymnasium-examples
+cargo run --release --example lunarlander --features gymnasium-examples
 ```
+
+**Python venv setup (Apple Silicon — one-time):**
+
+```bash
+/opt/homebrew/bin/python3 -m venv .venv
+source .venv/bin/activate
+pip install gymnasium "gymnasium[box2d]"
+deactivate
+```
+
+The gymnasium examples auto-detect `.venv` at runtime; no activation needed when running.
 
 ### Source Layout
 
@@ -42,9 +59,13 @@ src/
   image_encoder.rs — SOM for image data, supports reconstruct()
   hierarchy.rs     — top-level orchestrator
 tests/
-  smoke_test.rs    — 6 integration tests
+  smoke_test.rs    — 10 integration tests
 examples/
-  cartpole.rs      — CartPole RL demo
+  cartpole.rs             — CartPole RL (pure Rust physics)
+  wave_prediction.rs      — wavy-line sequence prediction (pure Rust)
+  cartpole_env_runner.rs  — CartPole-v1 via gymnasium (--features gymnasium-examples)
+  lunarlander.rs          — LunarLander-v3 via gymnasium (--features gymnasium-examples)
+python_ref/        — original Python examples using PyAOgmaNeo (reference only)
 ```
 
 ### Architecture
