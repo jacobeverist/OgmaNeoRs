@@ -69,9 +69,49 @@ cargo test test_hierarchy_create_and_step
 
 # Lint
 cargo clippy
+```
 
-# Run the CartPole RL example
+---
+
+## Examples
+
+### Pure Rust (no extra dependencies)
+
+```bash
+# CartPole balancing via RL (built-in physics)
 cargo run --release --example cartpole
+
+# Wavy-line sequence prediction (ASCII recall output)
+cargo run --release --example wave_prediction
+```
+
+### Gymnasium examples (requires Python)
+
+These examples drive [Gymnasium](https://gymnasium.farama.org/) environments via PyO3.
+
+**Setup** — create an ARM64 virtual environment and install gymnasium:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install gymnasium
+pip install "gymnasium[box2d]"   # needed for LunarLander
+```
+
+**Run** — activate the venv so pyo3 picks it up automatically:
+
+```bash
+source .venv/bin/activate
+
+cargo run --release --example cartpole_env_runner --features gymnasium-examples
+cargo run --release --example lunarlander --features gymnasium-examples
+```
+
+Or point pyo3 at the venv interpreter directly without activating:
+
+```bash
+PYO3_PYTHON=.venv/bin/python3 cargo run --release --example cartpole_env_runner --features gymnasium-examples
+PYO3_PYTHON=.venv/bin/python3 cargo run --release --example lunarlander --features gymnasium-examples
 ```
 
 ---
@@ -114,7 +154,10 @@ src/
 tests/
   smoke_test.rs    — integration tests
 examples/
-  cartpole.rs      — CartPole balancing via RL
+  cartpole.rs             — CartPole balancing via RL (pure Rust)
+  wave_prediction.rs      — wavy-line sequence prediction (pure Rust)
+  cartpole_env_runner.rs  — CartPole-v1 via gymnasium (requires --features gymnasium-examples)
+  lunarlander.rs          — LunarLander-v3 via gymnasium (requires --features gymnasium-examples)
 cpp_ref/           — original C++ source (reference only)
 doc/               — documentation
 ```
